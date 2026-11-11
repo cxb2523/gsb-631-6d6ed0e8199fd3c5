@@ -28,6 +28,15 @@ import type { RenderTargetNode } from '../rendergraph/nodes/RenderTargetNode.js'
 import { SamplerBindingType } from '../elements/textures/Texture.js';
 import { SplattingPlugin } from './plugins/Splatting.js';
 import { TextureFormat } from '../elements/textures/types.js';
+import {
+    diagnoseFrameSize,
+    diagnoseRenderGraphCache,
+    type FrameSizeDiagnostics,
+    type FrameSizeSnapshot,
+    type PipelineDestroyedDiagnostics,
+    type RenderGraphDiagnostics,
+    type RenderGraphSnapshot,
+} from './GraphCacheDiagnostics.js';
 
 export class PostPipeline {
     /**
@@ -169,6 +178,34 @@ export class PostPipeline {
         const h = height * pixelRatio;
         this.rendererAdaptor.setSize(w, h);
         this.mapPlugins(plugin => plugin.updateFrameSize(w, h));
+    }
+
+    /**
+     * Read-only diagnostics for the render-graph cache branch that
+     * {@link createRenderGraph} would take for the given snapshot. Does not
+     * build a graph, touch the cache, or mutate any pipeline state.
+     *
+     * After {@link destroy} the effect composer is gone and the pipeline can
+     * no longer be diagnosed; in that state a structured "destroyed" result is
+     * returned instead of throwing.
+     */
+    auditRenderGraph(snapshot: RenderGraphSnapshot): RenderGraphDiagnostics | PipelineDestroyedDiagnostics {
+        if (!this.effectComposer) {
+            return { diagnosticAvailable: false, reason: 'pipeline-destroyed' };
+        }
+        return diagnoseRenderGraphCache(snapshot);
+    }
+
+    /**
+     * Read-only diagnostics mirroring {@link setFrameSize}: reports the pixel
+     * dimensions produced by the pixel-ratio multiplication and the plugins
+     * that would be notified. Performs no resize and no plugin notification.
+     */
+    auditFrameSize(snapshot: FrameSizeSnapshot): FrameSizeDiagnostics | PipelineDestroyedDiagnostics {
+        if (!this.effectComposer) {
+            return { diagnosticAvailable: false, reason: 'pipeline-destroyed' };
+        }
+        return diagnoseFrameSize(snapshot);
     }
 
     updateEffect(
