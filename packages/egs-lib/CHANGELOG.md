@@ -1,0 +1,18 @@
+# DEV
+
+- 改进编码风格开启`verbatimModuleSyntax` & `isolatedModules`，迁移至`OXC`
+- 改造为标准`ESM`
+- `WorkerPool`清理`worker`事件优化
+- 改进`WorkerPool`临时函数对象的创建
+- `Promise.withResolvers`可用时，使用`Promise.withResolvers`
+
+# 1.0.3
+
+- 升级 `typescript: ^6.0.3` & `tslib: ^2.8.1`
+- 添加`BVH`
+
+# 1.0.2
+
+# 1.0.1
+
+# 1.0.0

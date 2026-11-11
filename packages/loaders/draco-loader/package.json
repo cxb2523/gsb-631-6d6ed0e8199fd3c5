@@ -1,0 +1,36 @@
+{
+  "name": "@qunhe/egs-draco-loader",
+  "version": "1.0.2",
+  "description": "decode draco",
+  "license": "MIT",
+  "main": "index.js",
+  "module": "index.js",
+  "type": "module",
+  "types": "index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./index.js",
+      "types": "./index.d.ts"
+    }
+  },
+  "repository": "https://github.com/manycoretech/egs.git",
+  "release": {
+    "scripts": {
+      "pre-release": "pnpm build:release"
+    },
+    "publishRoot": "./build"
+  },
+  "scripts": {
+    "build": "pnpm egs-build --cp ./draco_decoder*",
+    "build:release": "pnpm build --release",
+    "build:types": "pnpm egs-build --cp ./*.d.ts --type-only",
+    "build:types:release": "pnpm build:types --type-only"
+  },
+  "dependencies": {
+    "@qunhe/egs-lib": "^1.0.2",
+    "tslib": "catalog:"
+  },
+  "devDependencies": {
+    "typescript": "catalog:"
+  }
+}

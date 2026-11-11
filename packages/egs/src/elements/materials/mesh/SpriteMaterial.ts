@@ -1,0 +1,218 @@
+import type { WGLProgram } from '../../../renderer/webgl/WGLProgram.js';
+import {
+    type ShaderBuilder,
+    ShaderVaryingTypes,
+    ShaderInjectionTypes,
+} from '../../../renderer/shader/builders/ShaderBuilder.js';
+import { WebGLShaderDataType } from '../../../renderer/webgl/WGLConstants.js';
+import { Material, type MaterialParameters, type ConvertMaterialParameters } from '../Material.js';
+import type { Serializer, Deserializer } from '../../../utils/Serialization.js';
+import { BuiltInUniformTypes } from '../../../renderer/RenderState/BuiltInUniforms.js';
+import { HashKeyBuilder } from '../../../utils/HashKeyBuilder.js';
+import { Utils, type Nullable } from '../../../utils/Utils.js';
+import type { Sprite } from '../../../scene/drawables/Sprite.js';
+import type { ShaderComponentRegistry } from '../../../scene/ShaderComponentRegistry.js';
+import { readonlyMath } from '../../../math/Readonly.js';
+import { materialProperty } from '../../../ContentAPI.js';
+import type { Texture2D } from '../../textures/Texture2D.js';
+import type { TextureV2 } from '../../textures/TextureV2.js';
+import type { Texture } from '../../textures/Texture.js';
+
+export type SpriteMaterialParameters<T extends Texture2D | TextureV2 = Texture2D> = MaterialParameters &
+    ConvertMaterialParameters<Pick<SpriteMaterial<T>, 'sizeAttenuation' | 'rotation' | 'opacity' | 'color'>> & {
+        texture?: T | null;
+    };
+
+const keys = ['sizeAttenuation', 'rotation', 'texture', 'opacity', 'color'];
+/**
+ * A dedicated material of {@link Sprite| Sprite}.
+ */
+export class SpriteMaterial<T extends Texture2D | TextureV2 = Texture2D> extends Material {
+    /**
+     * Whether the size of the sprite is attenuated by the camera depth. (Perspective camera only.)
+     * @defaultValue `false`
+     */
+    @materialProperty()
+    sizeAttenuation = false;
+    /**
+     * The rotation of the sprite in radians.
+     * @defaultValue `0`
+     */
+    @materialProperty()
+    rotation = 0;
+    /**
+     * Color of the material, by default set to white (0xffffff).
+     * The value of color multiply with the color of {@link texture| texture}.
+     */
+    @materialProperty()
+    color = readonlyMath.color();
+    /**
+     * A picture for sprite.
+     * @defaultValue `null`
+     */
+    @materialProperty()
+    texture: Nullable<T> = null;
+    /**
+     * The Transparency of object.
+     * @defaultValue `null`
+     */
+    @materialProperty()
+    opacity = 1;
+    /**
+     * The name of instance's class.
+     */
+    className() {
+        return 'SpriteMaterial';
+    }
+
+    constructor(p: SpriteMaterialParameters<T> = {}) {
+        super();
+        this.transparent = true;
+        this.setValues(p);
+    }
+    /**
+     * Change the corresponding attribute according to the values of given {@link SpriteMaterialParameters| parameters}.
+     * @param {SpriteMaterialParameters} p a object of specified type contains parameters.
+     */
+    setValues(p: SpriteMaterialParameters<T>) {
+        if (p === undefined) {
+            return;
+        }
+        super.setValues(p);
+        Utils.copyProperties(keys, this, p);
+    }
+
+    traverseTexture(visitor: (tex: Texture) => void) {
+        super.traverseTexture(visitor);
+        Utils.visitTexture([this.texture], visitor);
+    }
+    /**
+     * @internal
+     */
+    generateShaderKey(r: ShaderComponentRegistry) {
+        return (
+            super.generateShaderKey(r) +
+            HashKeyBuilder.getInstance().bool(this.sizeAttenuation).hasItem(this.texture).getKey()
+        );
+    }
+    /**
+     * Store the attributes of this class into string as serializing format.
+     * @param {Serializer} ctx an instance used to store the data of scene objects.
+     */
+    serialize(ctx: Serializer) {
+        super.serialize(ctx);
+        ctx.puts<SpriteMaterial>(['sizeAttenuation', 'rotation', 'texture', 'opacity', 'color']);
+    }
+    /**
+     * Parse the data for this class from string according to serializing format.
+     * @param {Deserializer} ctx an instance give the method to take the data for attribute.
+     */
+    deserialize(ctx: Deserializer) {
+        super.deserialize(ctx);
+        ctx.reads<SpriteMaterial>(['sizeAttenuation', 'rotation', 'texture', 'opacity', 'color']);
+    }
+    /**
+     * @internal
+     */
+    extendShaderShape(builder: ShaderBuilder, _: ShaderComponentRegistry) {
+        builder
+            .addUniform('rotation', WebGLShaderDataType.Float)
+            .addUniform('center', WebGLShaderDataType.Vec2)
+            .addGlobalUniform(BuiltInUniformTypes.modelViewMatrix)
+            .addGlobalUniform(BuiltInUniformTypes.projectionMatrix)
+            .addGlobalUniform(BuiltInUniformTypes.modelMatrix)
+            .inject(ShaderInjectionTypes.gl_Position, spriteVertex(this.sizeAttenuation));
+    }
+    /**
+     * @internal
+     */
+    computeShapeKey(_: ShaderComponentRegistry) {
+        // SpriteMaterial
+        return 'sp' + (this.sizeAttenuation ? '0' : '1');
+    }
+    /**
+     * @internal
+     */
+    updateShapeUniforms(p: WGLProgram, _: ShaderComponentRegistry) {
+        p.setUniform('rotation', this.rotation);
+        p.setUniform('center', (p.renderState.builtUniforms.currentDrawable as Sprite).center);
+    }
+    /**
+     * @internal
+     */
+    updateShadingUniforms(program: WGLProgram): void {
+        program.setUniform('opacity', this.opacity);
+        if (this.texture) {
+            program.setTexture2D('map', this.texture);
+        } else {
+            program.setUniform('color', this.color);
+        }
+    }
+    /**
+     * @internal
+     */
+    extendShaderShading(b: ShaderBuilder, _: ShaderComponentRegistry) {
+        b.addVarying(ShaderVaryingTypes.fragUV).addUniform('opacity', WebGLShaderDataType.Float);
+
+        if (this.texture) {
+            b.addUniform('map', WebGLShaderDataType.Sampler2D);
+        } else {
+            b.addUniform('color', WebGLShaderDataType.Vec3);
+        }
+
+        if (this.texture) {
+            b.inject(
+                ShaderInjectionTypes.gl_FragColor,
+                'gl_FragColor = texture2D(map, vUv);gl_FragColor.a *= opacity;',
+            );
+        } else {
+            b.inject(ShaderInjectionTypes.gl_FragColor, 'gl_FragColor = vec4(color * opacity, opacity);');
+        }
+    }
+    /**
+     * Copy the data to this instance from other instance.
+     * @param {MeshBasicMaterial} other the source of copied data
+     */
+    copy(other: SpriteMaterial<T>) {
+        super.copyBase(other);
+        this.texture = other.texture;
+        this.opacity = other.opacity;
+        this.rotation = other.rotation;
+        this.sizeAttenuation = other.sizeAttenuation;
+        return this;
+    }
+    /**
+     * Return a cloned instance of this class.
+     */
+    clone() {
+        return new SpriteMaterial<T>().copy(this);
+    }
+}
+
+function spriteVertex(sizeAttenuation: boolean) {
+    const sizeAttenuationStr = sizeAttenuation
+        ? `
+bool isPerspective = (projectionMatrix[2][3] == - 1.0);
+if (isPerspective) scale *= - mvPosition.z;
+        `
+        : '';
+
+    return `
+mvPosition = modelViewMatrix * vec4(0.0, 0.0, 0.0, 1.0);
+
+vec2 scale;
+scale.x = length(vec3(modelMatrix[0].x, modelMatrix[0].y, modelMatrix[0].z));
+scale.y = length(vec3(modelMatrix[1].x, modelMatrix[1].y, modelMatrix[1].z));
+
+${sizeAttenuationStr}
+
+vec2 alignedPosition = (position.xy - (center - vec2(0.5))) * scale;
+
+vec2 rotatedPosition;
+rotatedPosition.x = cos(rotation) * alignedPosition.x - sin(rotation) * alignedPosition.y;
+rotatedPosition.y = sin(rotation) * alignedPosition.x + cos(rotation) * alignedPosition.y;
+
+mvPosition.xy += rotatedPosition;
+
+gl_Position = projectionMatrix * mvPosition;`;
+}

@@ -1,0 +1,14 @@
+{
+  "name": "@internal/cli",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "bin": {
+    "egs-build": "./bin/egs-build.js",
+    "generate-api-impl": "./bin/generate-api-impl.js",
+    "invoke-lint-staged": "./bin/invoke-lint-staged.js"
+  },
+  "dependencies": {
+    "yargs": "^18.2.0"
+  }
+}

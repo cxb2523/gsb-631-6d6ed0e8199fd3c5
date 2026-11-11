@@ -1,0 +1,22 @@
+packages:
+  - 'packages/*'
+  - 'packages/loaders/*'
+  - 'packages/utils/*'
+  - 'tools/*'
+
+catalog:
+  'typescript': '^6.0.3'
+  'tslib': '^2.9.1'
+
+overrides:
+  '@qunhe/egs-typings': 'workspace:*'
+  '@qunhe/egs-lib': 'workspace:*'
+  '@qunhe/egs': 'workspace:*'
+  '@qunhe/egs-texture-loader': 'workspace:*'
+  '@qunhe/egs-gltf-loader': 'workspace:*'
+  '@qunhe/egs-draco-loader': 'workspace:*'
+  '@qunhe/egs-splat-loader': 'workspace:*'
+  '@qunhe/egs-splat-utils': 'workspace:*'
+  '@internal/cli': 'workspace:*'
+  '@internal/utils': 'workspace:*'
+  '@types/node': '^22.20.0'

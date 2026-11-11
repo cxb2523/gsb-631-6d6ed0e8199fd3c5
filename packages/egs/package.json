@@ -1,0 +1,46 @@
+{
+  "name": "@qunhe/egs",
+  "version": "1.2.101",
+  "description": "Manycore EGS Graphics System",
+  "license": "MIT",
+  "type": "module",
+  "module": "index.js",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./index.js",
+      "types": "./index.d.ts"
+    }
+  },
+  "repository": "https://github.com/manycoretech/egs.git",
+  "scripts": {
+    "build": "pnpm egs-build",
+    "build:release": "pnpm build --release",
+    "build:types": "pnpm build --type-only",
+    "build:types:release": "pnpm build --release --type-only",
+    "generate:content-api": "pnpm generate-api-impl --target ./src/ContentAPI.ts --entry ContentAPI ContentManagedAPI",
+    "generate:pipeline-api": "pnpm generate-api-impl --target ./src/fx/PipelineAPI.ts --entry PipelineAPI"
+  },
+  "dependencies": {
+    "@qunhe/egs-lib": "^1.0.0",
+    "tslib": "catalog:"
+  },
+  "devDependencies": {
+    "@qunhe/egs-typings": "workspace:*",
+    "typescript": "catalog:"
+  },
+  "release": {
+    "scripts": {
+      "pre-release": "pnpm build:release"
+    },
+    "publishRoot": "./build"
+  },
+  "typeOnlyExports": [
+    {
+      "name": "Viewport",
+      "type": "class",
+      "abstract": false
+    }
+  ]
+}

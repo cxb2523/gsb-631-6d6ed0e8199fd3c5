@@ -1,0 +1,138 @@
+import { SingleProjectShadow } from './Shadow.js';
+import { OrthographicCamera } from '../cameras/OrthographicCamera.js';
+import {
+    type ShaderBuilder,
+    ShaderInjectionTypes,
+    ShaderVaryingTypes,
+} from '../../renderer/shader/builders/ShaderBuilder.js';
+import { BuiltInUniformTypes } from '../../renderer/RenderState/BuiltInUniforms.js';
+import { WebGLShaderDataType } from '../../renderer/webgl/WGLConstants.js';
+import { Vector3 } from '../../math/Vector3.js';
+import { ShaderBlockPool } from '../../renderer/shader/builders/ShaderBlockPool.js';
+import type { DirectionalLight } from '../lights/DirectionalLight.js';
+import type { Deserializer, Serializer } from '../../utils/Serialization.js';
+import type { WGLProgram } from '../../renderer/webgl/WGLProgram.js';
+import { Vector2 } from '../../math/Vector2.js';
+import { lightProperty } from '../../ContentAPI.js';
+
+export class DirectionalShadow extends SingleProjectShadow<OrthographicCamera> {
+    @lightProperty()
+    enableAutoBias = false;
+    @lightProperty()
+    shadowCameraNear = 0.1;
+    @lightProperty()
+    shadowCameraFar = 2000;
+    @lightProperty()
+    shadowRenderSize = new Vector2(2, 2);
+
+    className(): string {
+        return 'DirectionalShadow';
+    }
+
+    constructor(directional: DirectionalLight) {
+        super(directional);
+        this.camera = new OrthographicCamera();
+        this.camera.up = new Vector3(0, 0, 1);
+    }
+
+    copy(other: DirectionalShadow) {
+        super.copy(other);
+        this.enableAutoBias = other.enableAutoBias;
+        this.shadowCameraNear = other.shadowCameraNear;
+        this.shadowCameraFar = other.shadowCameraFar;
+        this.shadowRenderSize = other.shadowRenderSize;
+    }
+
+    updateCameraAndShadowMatrices(light: DirectionalLight) {
+        super.updateCameraAndShadowMatrices(light);
+        this.shadowRenderSize = new Vector2(this.camera.right - this.camera.left, this.camera.top - this.camera.bottom);
+        this.shadowCameraNear = this.camera.near;
+        this.shadowCameraFar = this.camera.far;
+    }
+
+    extendsShader(builder: ShaderBuilder, length: number) {
+        super.includeShadowMapCommon(builder);
+        builder
+            .addVaryingCustomArray('vDirectionalShadowCoord', WebGLShaderDataType.Vec4, length)
+            .addGlobalUniform(BuiltInUniformTypes.viewMatrix)
+            .addVarying(ShaderVaryingTypes.worldPosition)
+            .addFragmentCustom(getCustomFrag(true))
+            .addVertexCustom(getCustomVert(true))
+            .addVertex(ShaderBlockPool.InverseTransformDirection)
+            .inject(ShaderInjectionTypes.vary_any, vertVary);
+    }
+
+    extendsShaderDeferred(builder: ShaderBuilder) {
+        super.includeShadowMapCommon(builder);
+        builder.addFragmentCustom(getCustomFrag(false)).addFragment(ShaderBlockPool.InverseTransformDirection);
+    }
+
+    updateUniformsImpl(program: WGLProgram, prefix: string) {
+        super.updateUniformsImpl(program, prefix);
+
+        program.setUniform(prefix + '.shadowAutoBias', this.enableAutoBias ? 1 : 0);
+        program.setUniform(prefix + '.shadowCameraFar', this.camera.far);
+        program.setUniform(prefix + '.shadowCameraNear', this.camera.near);
+        program.setUniform(prefix + '.shadowRenderSize', this.shadowRenderSize);
+    }
+
+    deserialize(ctx: Deserializer) {
+        super.deserialize(ctx);
+        ctx.reads<DirectionalShadow>(['camera']);
+    }
+
+    serialize(ctx: Serializer) {
+        super.serialize(ctx);
+        ctx.puts<DirectionalShadow>(['camera']);
+    }
+}
+
+function getCustomFrag(isArray: boolean) {
+    return `
+${isArray ? 'uniform sampler2D directionalShadowMap[NUM_DIR_LIGHT_SHADOWS];' : 'uniform sampler2D directionalShadowMap;'}
+
+struct DirectionalLightShadow {
+    mat4 shadowMatrix;
+    float shadowBias;
+    float shadowAutoBias;
+    float shadowNormalBias;
+    float shadowRadius;
+    vec2 shadowMapSize;
+    float shadowIntensity;
+    float shadowCameraNear;
+    float shadowCameraFar;
+    vec2 shadowRenderSize;
+};
+
+${isArray ? 'uniform DirectionalLightShadow directionalLightShadowsInfo[NUM_DIR_LIGHT_SHADOWS];' : 'uniform DirectionalLightShadow directionalLightShadowsInfo;'}
+`;
+}
+
+function getCustomVert(isArray: boolean) {
+    return `
+struct DirectionalLightShadow {
+    mat4 shadowMatrix;
+    float shadowBias;
+    float shadowAutoBias;
+    float shadowNormalBias;
+    float shadowRadius;
+    vec2 shadowMapSize;
+    float shadowIntensity;
+    float shadowCameraNear;
+    float shadowCameraFar;
+    vec2 shadowRenderSize;
+};
+${isArray ? 'uniform DirectionalLightShadow directionalLightShadowsInfo[NUM_DIR_LIGHT_SHADOWS];' : 'uniform DirectionalLightShadow directionalLightShadowsInfo;'}
+`;
+}
+
+const vertVary = `
+// Offsetting the position used for querying occlusion along the world normal can be used to reduce shadow acne.
+vec3 directionalShadowWorldNormal = inverseTransformDirection(transformedNormal, viewMatrix);
+vec4 directionalShadowWorldPosition;
+
+for (int i = 0; i < NUM_DIR_LIGHT_SHADOWS; i ++) {
+    directionalShadowWorldPosition = vec4(vWorldPosition, 1.0) + vec4(directionalShadowWorldNormal * directionalLightShadowsInfo[i].shadowNormalBias, 0);
+    vDirectionalShadowCoord[i] = directionalLightShadowsInfo[i].shadowMatrix * directionalShadowWorldPosition;
+}
+`;

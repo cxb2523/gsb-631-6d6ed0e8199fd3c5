@@ -1,0 +1,320 @@
+import { SplatData } from './SplatData.js';
+import { type ISampler, ISamplerFormat, type ISingleSplat, type ISplatData } from '../types.js';
+import { computeTextureSize } from '../utils/texture.js';
+import { clamp, encodeQuatOct, decodeQuatOct } from '../utils/math.js';
+import {
+    toHalf,
+    fromHalf,
+    packSint5x9ToUint32x2,
+    unpackSint5x9FromUint32x2,
+    packSint4ToUint8,
+    unpackUint8ToSint4x2,
+    toUnsignedChar,
+    fromUnsignedChar,
+    toUnsignedCharV2,
+} from '../utils/packing.js';
+
+const LN_SCALE_MIN = -12;
+const LN_SCALE_MAX = 9;
+const LN_SCALE = 254.0 / (LN_SCALE_MAX - LN_SCALE_MIN);
+const LN_SCALE_INV = 1 / LN_SCALE;
+export class SuperCompressedSplatData extends SplatData {
+    counts: number = 0;
+    shDegree: number = 0;
+
+    private splatSampler: ISampler;
+    private splatUint8Buffer: Uint8Array;
+    private splatUint16Buffer: Uint16Array;
+
+    private sh1Sampler: ISampler;
+    private sh1Uint8Buffer: Uint8Array;
+    private sh1Uint32Buffer: Uint32Array;
+
+    private sh2Sampler: ISampler;
+    private sh2Uint8Buffer: Uint8Array;
+
+    init(counts: number, shDegree: number) {
+        this.counts = counts;
+        this.shDegree = Math.min(shDegree, this.maxShDegree);
+
+        const { w: width, h: height, d: depth } = computeTextureSize(counts, this.maxTextureSize);
+        const pixelCounts = width * height * depth;
+
+        const splatSampler = (this.splatSampler = {
+            width,
+            height,
+            depth,
+            format: ISamplerFormat.RGBA_UINT,
+            source: new Uint8Array(16 * pixelCounts),
+        });
+        this.splatUint8Buffer = splatSampler.source;
+        this.splatUint16Buffer = new Uint16Array(splatSampler.source.buffer);
+
+        const sh1Sampler = (this.sh1Sampler = {
+            width,
+            height,
+            depth,
+            format: shDegree === 1 ? ISamplerFormat.RG_UINT : ISamplerFormat.RGBA_UINT,
+            source: new Uint8Array((shDegree >= 1 ? (shDegree === 1 ? 8 : 16) : 0) * pixelCounts),
+        });
+        this.sh1Uint8Buffer = sh1Sampler.source;
+        this.sh1Uint32Buffer = new Uint32Array(sh1Sampler.source.buffer);
+        const sh2Sampler = (this.sh2Sampler = {
+            width,
+            height,
+            depth,
+            format: ISamplerFormat.RGBA_UINT,
+            source: new Uint8Array((shDegree >= 3 ? 16 : 0) * pixelCounts),
+        });
+        this.sh2Uint8Buffer = sh2Sampler.source;
+    }
+
+    set(i: number, single: ISingleSplat) {
+        const { splatUint16Buffer, splatUint8Buffer } = this;
+        const i8 = i * 8;
+        const i16 = i * 16;
+
+        splatUint16Buffer[i8 + 0] = toHalf(single.x);
+        splatUint16Buffer[i8 + 1] = toHalf(single.y);
+        splatUint16Buffer[i8 + 2] = toHalf(single.z);
+
+        splatUint8Buffer[i16 + 6] = clamp(((Math.log(single.sx) - LN_SCALE_MIN) * LN_SCALE + 1.5) | 0, 0, 255);
+        splatUint8Buffer[i16 + 7] = clamp(((Math.log(single.sy) - LN_SCALE_MIN) * LN_SCALE + 1.5) | 0, 0, 255);
+        splatUint8Buffer[i16 + 8] = clamp(((Math.log(single.sz) - LN_SCALE_MIN) * LN_SCALE + 1.5) | 0, 0, 255);
+
+        const oct = encodeQuatOct(single.qx, single.qy, single.qz, single.qw);
+        splatUint8Buffer[i16 + 9] = toUnsignedChar(oct[0]);
+        splatUint8Buffer[i16 + 10] = toUnsignedChar(oct[1]);
+        splatUint8Buffer[i16 + 11] = toUnsignedCharV2(oct[2]);
+
+        splatUint8Buffer[i16 + 12] = toUnsignedCharV2(single.r);
+        splatUint8Buffer[i16 + 13] = toUnsignedCharV2(single.g);
+        splatUint8Buffer[i16 + 14] = toUnsignedCharV2(single.b);
+        splatUint8Buffer[i16 + 15] = toUnsignedCharV2(single.a);
+    }
+
+    setCenter(i: number, x: number, y: number, z: number) {
+        const { splatUint16Buffer } = this;
+        const offset = i * 8;
+        splatUint16Buffer[offset + 0] = toHalf(x);
+        splatUint16Buffer[offset + 1] = toHalf(y);
+        splatUint16Buffer[offset + 2] = toHalf(z);
+    }
+
+    setScale(i: number, sx: number, sy: number, sz: number) {
+        const { splatUint8Buffer } = this;
+        const offset = i * 16;
+        splatUint8Buffer[offset + 6] = clamp(((Math.log(sx) - LN_SCALE_MIN) * LN_SCALE + 1.5) | 0, 0, 255);
+        splatUint8Buffer[offset + 7] = clamp(((Math.log(sy) - LN_SCALE_MIN) * LN_SCALE + 1.5) | 0, 0, 255);
+        splatUint8Buffer[offset + 8] = clamp(((Math.log(sz) - LN_SCALE_MIN) * LN_SCALE + 1.5) | 0, 0, 255);
+    }
+
+    setQuat(i: number, qx: number, qy: number, qz: number, qw: number) {
+        const { splatUint8Buffer } = this;
+        const offset = i * 16;
+        const oct = encodeQuatOct(qx, qy, qz, qw);
+        splatUint8Buffer[offset + 9] = toUnsignedChar(oct[0]);
+        splatUint8Buffer[offset + 10] = toUnsignedChar(oct[1]);
+        splatUint8Buffer[offset + 11] = toUnsignedCharV2(oct[2]);
+    }
+
+    setColor(i: number, r: number, g: number, b: number) {
+        const { splatUint8Buffer } = this;
+        const offset = i * 16;
+        splatUint8Buffer[offset + 12] = toUnsignedCharV2(r);
+        splatUint8Buffer[offset + 13] = toUnsignedCharV2(g);
+        splatUint8Buffer[offset + 14] = toUnsignedCharV2(b);
+    }
+
+    setAlpha(i: number, a: number) {
+        const { splatUint8Buffer } = this;
+        const offset = i * 16;
+        splatUint8Buffer[offset + 15] = toUnsignedCharV2(a);
+    }
+
+    setShN(i: number, shN: number[]) {
+        const { shDegree, sh1Uint32Buffer, sh1Uint8Buffer, sh2Uint8Buffer } = this;
+
+        if (shDegree >= 1) {
+            const offset = (shDegree === 1 ? 2 : 4) * i;
+            packSint5x9ToUint32x2(shN, sh1Uint32Buffer, offset);
+        }
+
+        if (shDegree >= 2) {
+            const offset = 16 * i + 8;
+            for (let j = 0; j < 7; j++) {
+                sh1Uint8Buffer[offset + j] = packSint4ToUint8(shN[9 + j * 2], shN[10 + j * 2]);
+            }
+            sh1Uint8Buffer[offset + 7] = packSint4ToUint8(shN[23], 0);
+        }
+
+        if (shDegree >= 3) {
+            const offset = 16 * i;
+            for (let j = 0; j < 10; j++) {
+                sh2Uint8Buffer[offset + j] = packSint4ToUint8(shN[24 + j * 2], shN[25 + j * 2]);
+            }
+            sh2Uint8Buffer[offset + 10] = packSint4ToUint8(shN[44], 0);
+        }
+    }
+
+    get(i: number, single: ISingleSplat) {
+        const { splatUint16Buffer, splatUint8Buffer } = this;
+
+        const i8 = i * 8;
+        const i16 = i * 16;
+
+        single.x = fromHalf(splatUint16Buffer[i8 + 0]);
+        single.y = fromHalf(splatUint16Buffer[i8 + 1]);
+        single.z = fromHalf(splatUint16Buffer[i8 + 2]);
+
+        const uScaleX = splatUint8Buffer[i16 + 6];
+        const uScaleY = splatUint8Buffer[i16 + 7];
+        const uScaleZ = splatUint8Buffer[i16 + 8];
+        single.sx = Math.exp(LN_SCALE_MIN + (uScaleX - 1) * LN_SCALE_INV);
+        single.sy = Math.exp(LN_SCALE_MIN + (uScaleY - 1) * LN_SCALE_INV);
+        single.sz = Math.exp(LN_SCALE_MIN + (uScaleZ - 1) * LN_SCALE_INV);
+
+        const u = fromUnsignedChar(splatUint8Buffer[i16 + 9]);
+        const v = fromUnsignedChar(splatUint8Buffer[i16 + 10]);
+        const angle = splatUint8Buffer[i16 + 11] / 255;
+        const quat = decodeQuatOct(u, v, angle);
+        single.qx = quat[0];
+        single.qy = quat[1];
+        single.qz = quat[2];
+        single.qw = quat[3];
+
+        single.r = splatUint8Buffer[i16 + 12] / 255;
+        single.g = splatUint8Buffer[i16 + 13] / 255;
+        single.b = splatUint8Buffer[i16 + 14] / 255;
+        single.a = splatUint8Buffer[i16 + 15] / 255;
+    }
+
+    getCenter(i: number, single: ISingleSplat) {
+        const { splatUint16Buffer } = this;
+        const i8 = i * 8;
+        single.x = fromHalf(splatUint16Buffer[i8 + 0]);
+        single.y = fromHalf(splatUint16Buffer[i8 + 1]);
+        single.z = fromHalf(splatUint16Buffer[i8 + 2]);
+    }
+
+    getScale(i: number, single: ISingleSplat) {
+        const { splatUint8Buffer } = this;
+        const i16 = i * 16;
+        const uScaleX = splatUint8Buffer[i16 + 6];
+        const uScaleY = splatUint8Buffer[i16 + 7];
+        const uScaleZ = splatUint8Buffer[i16 + 8];
+        single.sx = Math.exp(LN_SCALE_MIN + (uScaleX - 1) * LN_SCALE_INV);
+        single.sy = Math.exp(LN_SCALE_MIN + (uScaleY - 1) * LN_SCALE_INV);
+        single.sz = Math.exp(LN_SCALE_MIN + (uScaleZ - 1) * LN_SCALE_INV);
+    }
+
+    getQuat(i: number, single: ISingleSplat) {
+        const { splatUint8Buffer } = this;
+        const i16 = i * 16;
+        const u = fromUnsignedChar(splatUint8Buffer[i16 + 9]);
+        const v = fromUnsignedChar(splatUint8Buffer[i16 + 10]);
+        const angle = splatUint8Buffer[i16 + 11] / 255;
+        const quat = decodeQuatOct(u, v, angle);
+        single.qx = quat[0];
+        single.qy = quat[1];
+        single.qz = quat[2];
+        single.qw = quat[3];
+    }
+
+    getColor(i: number, single: ISingleSplat) {
+        const { splatUint8Buffer } = this;
+        const i16 = i * 16;
+        single.r = splatUint8Buffer[i16 + 12] / 255;
+        single.g = splatUint8Buffer[i16 + 13] / 255;
+        single.b = splatUint8Buffer[i16 + 14] / 255;
+    }
+
+    getAlpha(i: number, single: ISingleSplat) {
+        const { splatUint8Buffer } = this;
+        const i16 = i * 16;
+        single.a = splatUint8Buffer[i16 + 15] / 255;
+    }
+
+    getShN(i: number, shN: number[]) {
+        const { shDegree, sh1Uint32Buffer, sh1Uint8Buffer, sh2Uint8Buffer } = this;
+
+        if (shDegree >= 1) {
+            const offset = (shDegree === 1 ? 2 : 4) * i;
+            const low = sh1Uint32Buffer[offset];
+            const high = sh1Uint32Buffer[offset + 1];
+            unpackSint5x9FromUint32x2(low, high, shN, 0);
+        }
+
+        if (shDegree >= 2) {
+            const offset = 16 * i + 8;
+            for (let j = 0; j < 7; j++) {
+                unpackUint8ToSint4x2(sh1Uint8Buffer[offset + j], shN, 9 + j * 2);
+            }
+            shN[23] = (sh1Uint8Buffer[offset + 7] & 0x0f) * 0.125 - 1.0;
+        }
+
+        if (shDegree >= 3) {
+            const offset = 16 * i;
+            for (let j = 0; j < 10; j++) {
+                unpackUint8ToSint4x2(sh2Uint8Buffer[offset + j], shN, 24 + j * 2);
+            }
+            shN[44] = (sh2Uint8Buffer[offset + 10] & 0x0f) * 0.125 - 1.0;
+        }
+    }
+
+    fillCenters(centers: Float32Array) {
+        const { counts, splatUint16Buffer } = this;
+        for (let i = 0; i < counts; i++) {
+            const i3 = i * 3;
+            const i8 = i * 8;
+            centers[i3 + 0] = fromHalf(splatUint16Buffer[i8 + 0]);
+            centers[i3 + 1] = fromHalf(splatUint16Buffer[i8 + 1]);
+            centers[i3 + 2] = fromHalf(splatUint16Buffer[i8 + 2]);
+        }
+    }
+
+    serialize(): ISplatData {
+        return {
+            counts: this.counts,
+            shDegree: this.shDegree,
+            samplers: [this.splatSampler, this.sh1Sampler, this.sh2Sampler],
+        };
+    }
+
+    deserialize(data: ISplatData) {
+        const { counts, shDegree, samplers } = data;
+        this.counts = counts;
+        this.shDegree = shDegree;
+
+        const { w: width, h: height, d: depth } = computeTextureSize(counts, this.maxTextureSize);
+        const pixelCounts = width * height * depth;
+
+        const splatSampler = (this.splatSampler = samplers[0] ?? {
+            width,
+            height,
+            depth,
+            format: ISamplerFormat.RGBA_UINT,
+            source: new Uint8Array(16 * pixelCounts),
+        });
+        this.splatUint8Buffer = new Uint8Array(splatSampler.source.buffer);
+        this.splatUint16Buffer = new Uint16Array(splatSampler.source.buffer);
+
+        const sh1Sampler = (this.sh1Sampler = samplers[1] ?? {
+            width,
+            height,
+            depth,
+            format: shDegree === 1 ? ISamplerFormat.RG_UINT : ISamplerFormat.RGBA_UINT,
+            source: new Uint8Array((shDegree >= 1 ? (shDegree === 1 ? 8 : 16) : 0) * pixelCounts),
+        });
+        this.sh1Uint8Buffer = sh1Sampler.source;
+        this.sh1Uint32Buffer = new Uint32Array(sh1Sampler.source.buffer);
+        const sh2Sampler = (this.sh2Sampler = samplers[2] ?? {
+            width,
+            height,
+            depth,
+            format: ISamplerFormat.RGBA_UINT,
+            source: new Uint8Array((shDegree >= 3 ? 16 : 0) * pixelCounts),
+        });
+        this.sh2Uint8Buffer = sh2Sampler.source;
+    }
+}

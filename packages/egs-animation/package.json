@@ -1,0 +1,38 @@
+{
+  "name": "@qunhe/egs-animation",
+  "version": "1.1.0",
+  "description": "egs animation",
+  "main": "index.js",
+  "module": "index.js",
+  "type": "module",
+  "types": "index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./index.js",
+      "types": "./index.d.ts"
+    }
+  },
+  "license": "MIT",
+  "repository": "https://github.com/manycoretech/egs.git",
+  "release": {
+    "scripts": {
+      "pre-release": "pnpm build:release"
+    },
+    "publishRoot": "./build"
+  },
+  "scripts": {
+    "build": "pnpm egs-build",
+    "build:release": "pnpm build --release",
+    "build:types": "pnpm build --type-only",
+    "build:types:release": "pnpm build --release --type-only"
+  },
+  "dependencies": {
+    "@qunhe/egs": "^1.2.88",
+    "semver": "^7.8.6",
+    "tslib": "catalog:"
+  },
+  "devDependencies": {
+    "@types/semver": "^7.8.0",
+    "typescript": "catalog:"
+  }
+}
